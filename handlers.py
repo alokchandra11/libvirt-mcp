@@ -211,4 +211,98 @@ def register_handlers(mcp):
         conn.close()
         return "OK"
 
+    @mcp.tool()
+    def create_vm_snapshot(vm_name: str, snapshot_name: str, description: str = ""):
+        """
+        Create a snapshot for a Virtual Machine (VM) given its name and snapshot name.
+
+        Args:
+          vm_name: Name of the virtual machine
+          snapshot_name: Name for the snapshot
+          description: Optional description for the snapshot
+
+        Returns:
+          'OK' if success, error message otherwise
+        """
+        try:
+            conn = libvirt.open("qemu:///system")
+        except libvirt.libvirtError as e:
+            return f"Libvirt error: {str(e)}"
+
+        try:
+            domain = conn.lookupByName(vm_name)
+            snapshot_xml = f"""
+            <domainsnapshot>
+                <name>{snapshot_name}</name>
+                <description>{description}</description>
+            </domainsnapshot>
+            """
+            domain.snapshotCreateXML(snapshot_xml, 0)
+            conn.close()
+            return "OK"
+        except libvirt.libvirtError as e:
+            return f"Libvirt error: {str(e)}"
+
+    @mcp.tool()
+    def list_vm_snapshots(vm_name: str):
+        """
+        List all snapshots for a given Virtual Machine (VM), equivalent to 'virsh snapshot-list'.
+
+        Args:
+          vm_name: Name of the virtual machine
+
+        Returns:
+          A list of dictionaries with snapshot details (name, creation time, state), or error message.
+        """
+        try:
+            conn = libvirt.open("qemu:///system")
+        except libvirt.libvirtError as e:
+            return f"Libvirt error: {str(e)}"
+
+        try:
+            domain = conn.lookupByName(vm_name)
+            snapshot_names = domain.snapshotListNames(0)
+            snapshots = []
+            for snap_name in snapshot_names:
+                snap = domain.snapshotLookupByName(snap_name, 0)
+                snap_xml = snap.getXMLDesc(0)
+                root = ET.fromstring(snap_xml)
+                creation_time = root.findtext('creationTime')
+                state = root.findtext('state')
+                snapshots.append({
+                    'name': snap_name,
+                    'creation_time': creation_time,
+                    'state': state
+                })
+            conn.close()
+            return snapshots
+        except libvirt.libvirtError as e:
+            return f"Libvirt error: {str(e)}"
+
+    @mcp.tool()
+    def revert_vm_snapshot(vm_name: str, snapshot_name: str):
+        """
+        Revert a Virtual Machine (VM) to a specified snapshot, equivalent to 'virsh snapshot-revert'.
+
+        Args:
+          vm_name: Name of the virtual machine
+          snapshot_name: Name of the snapshot to revert to
+
+        Returns:
+          'OK' if success, error message otherwise
+        """
+        try:
+            conn = libvirt.open("qemu:///system")
+        except libvirt.libvirtError as e:
+            return f"Libvirt error: {str(e)}"
+
+        try:
+            domain = conn.lookupByName(vm_name)
+            snapshot = domain.snapshotLookupByName(snapshot_name, 0)
+            domain.revertToSnapshot(snapshot, 0)
+            conn.close()
+            return "OK"
+        except libvirt.libvirtError as e:
+            return f"Libvirt error: {str(e)}"
+
 
