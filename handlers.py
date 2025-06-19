@@ -305,4 +305,52 @@ def register_handlers(mcp):
         except libvirt.libvirtError as e:
             return f"Libvirt error: {str(e)}"
 
+    @mcp.tool()
+    def start_vm(vm_name: str):
+        """
+        Start a Virtual Machine (VM) given its name, equivalent to 'virsh start'.
+
+        Args:
+          vm_name: Name of the virtual machine
+
+        Returns:
+          'OK' if success, error message otherwise
+        """
+        try:
+            conn = libvirt.open("qemu:///system")
+        except libvirt.libvirtError as e:
+            return f"Libvirt error: {str(e)}"
+
+        try:
+            domain = conn.lookupByName(vm_name)
+            domain.create()  # This starts the VM
+            conn.close()
+            return "OK"
+        except libvirt.libvirtError as e:
+            return f"Libvirt error: {str(e)}"
+
+    @mcp.tool()
+    def reboot_vm(vm_name: str):
+        """
+        Reboot a Virtual Machine (VM) given its name, equivalent to 'virsh reboot'.
+
+        Args:
+          vm_name: Name of the virtual machine
+
+        Returns:
+          'OK' if success, error message otherwise
+        """
+        try:
+            conn = libvirt.open("qemu:///system")
+        except libvirt.libvirtError as e:
+            return f"Libvirt error: {str(e)}"
+
+        try:
+            domain = conn.lookupByName(vm_name)
+            domain.reboot(0)  # 0 means default reboot flags
+            conn.close()
+            return "OK"
+        except libvirt.libvirtError as e:
+            return f"Libvirt error: {str(e)}"
+
 
