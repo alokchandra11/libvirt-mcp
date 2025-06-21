@@ -1,117 +1,181 @@
-import argparse
-import sys
+#!/usr/bin/env python3
 import libvirt
 import xml.etree.ElementTree as ET
+import random
+from typing import Union, Dict, Any, List
 
-# Helper functions for VM operations
-def get_vm_ip(vm_name, network_name='default'):
+def get_vm_ip(vm_name: str, network_name: str = 'default') -> Union[str, None]:
+    """
+    Get the IP address of a Virtual Machine.
+    Returns the IP address as a string, an error message string, or None if not found.
+    """
+    conn = None
     try:
         conn = libvirt.open("qemu:///system")
-    except libvirt.libvirtError as e:
-        return f"Libvirt error: {str(e)}"
-    domain = conn.lookupByName(vm_name)
-    xml_desc = domain.XMLDesc()
-    root = ET.fromstring(xml_desc)
-    macs = [iface.get('address').lower() for iface in root.findall("./devices/interface/mac") if iface.get('address')]
-    if not macs:
+        try:
+            domain = conn.lookupByName(vm_name)
+        except libvirt.libvirtError as e:
+            return f"Libvirt error: {str(e)}"
+        xml_desc = domain.XMLDesc()
+        root = ET.fromstring(xml_desc)
+        macs = []
+        for iface in root.findall("./devices/interface/mac"):
+            addr = iface.get('address')
+            if addr is not None:
+                macs.append(addr.lower())
+        if not macs:
+            return None
+        try:
+            network = conn.networkLookupByName(network_name)
+            leases = network.DHCPLeases()
+        except libvirt.libvirtError as e:
+            return f"Libvirt error: {str(e)}"
+        for lease in leases:
+            if lease['mac'].lower() in macs:
+                return lease['ipaddr']
         return None
-    network = conn.networkLookupByName(network_name)
-    leases = network.DHCPLeases()
-    for lease in leases:
-        if lease['mac'].lower() in macs:
-            return lease['ipaddr']
-    return None
-
-def shutdown_vm(vm_name):
-    try:
-        conn = libvirt.open("qemu:///system")
     except libvirt.libvirtError as e:
         return f"Libvirt error: {str(e)}"
+    finally:
+        if conn:
+            conn.close()
+
+def shutdown_vm(vm_name: str) -> str:
+    """
+    Shutdown a virtual machine by name.
+    """
+    conn = None
     try:
+        conn = libvirt.open("qemu:///system")
         domain = conn.lookupByName(vm_name)
         if domain.isActive():
             domain.shutdown()
-        conn.close()
         return "OK"
     except libvirt.libvirtError as e:
         return f"Libvirt error: {str(e)}"
+    finally:
+        if conn:
+            conn.close()
 
-def destroy_vm(vm_name):
+def destroy_vm(vm_name: str) -> str:
+    """
+    Destroy and undefine a virtual machine by name.
+    """
+    conn = None
     try:
         conn = libvirt.open("qemu:///system")
-    except libvirt.libvirtError as e:
-        return f"Libvirt error: {str(e)}"
-    try:
         domain = conn.lookupByName(vm_name)
         if domain.isActive():
             domain.destroy()
         domain.undefine()
-        conn.close()
         return "OK"
     except libvirt.libvirtError as e:
         return f"Libvirt error: {str(e)}"
+    finally:
+        if conn:
+            conn.close()
 
-def list_vms():
-    try:
-        conn = libvirt.open("qemu:///system")
-    except libvirt.libvirtError as e:
-        return f"Libvirt error: {str(e)}"
-    vms = {}
-    for dom in conn.listAllDomains():
-        name = dom.name()
-        is_active = dom.isActive()
-        vms[name] = {
-            'id': dom.ID() if is_active else None,
-            'active': is_active,
-            'uuid': dom.UUIDString()
-        }
-    conn.close()
-    return vms
-
-def create_vm(name, cores, memory, path):
-    try:
-        conn = libvirt.open("qemu:///system")
-    except libvirt.libvirtError as e:
-        return f"Libvirt error: {str(e)}"
-    domain_xml = f"""
-    <domain type='kvm'>
-      <name>{name}</name>
-      <memory unit='MiB'>{memory}</memory>
-      <vcpu>{cores}</vcpu>
-      <os>
-        <type arch='x86_64'>hvm</type>
-        <boot dev='hd'/>
-      </os>
-      <devices>
-        <disk type='file' device='disk'>
-          <driver name='qemu' type='qcow2'/>
-          <source file='{path}'/>
-          <target dev='vda' bus='virtio'/>
-        </disk>
-        <console type='pty' tty='/dev/pts/2'>
-        </console>
-        <interface type='network'>
-        <mac address='52:54:00:0c:94:61'/>
-        <source network='default'/>
-        <model type='virtio'/>
-        </interface>
-      </devices>
-    </domain>
+def list_vms() -> Union[Dict[str, Any], str]:
     """
-    try:
-        domain = conn.defineXML(domain_xml)
-    except libvirt.libvirtError as e:
-        return f"Libvirt error: {str(e)}"
-    domain.create()
-    conn.close()
-    return "OK"
-
-def create_vm_snapshot(vm_name, snapshot_name, description=""):
+    List all virtual machines.
+    """
+    conn = None
     try:
         conn = libvirt.open("qemu:///system")
+        vms = {}
+        for dom in conn.listAllDomains():
+            name = dom.name()
+            is_active = dom.isActive()
+            vms[name] = {
+                'id': dom.ID() if is_active else None,
+                'active': is_active,
+                'uuid': dom.UUIDString()
+            }
+        return vms
     except libvirt.libvirtError as e:
         return f"Libvirt error: {str(e)}"
+    finally:
+        if conn:
+            conn.close()
+
+def generate_mac() -> str:
+    mac = [0x52, 0x54, 0x00,
+           random.randint(0x00, 0x7f),
+           random.randint(0x00, 0xff),
+           random.randint(0x00, 0xff)]
+    return ':'.join(map(lambda x: "%02x" % x, mac))
+
+def create_vm(name: str, cores: int, memory: int, path: str) -> str:
+    """
+    Create a new virtual machine.
+    """
+    # Input validation
+    if not isinstance(cores, int) or cores < 1:
+        return "Invalid number of CPU cores."
+    if not isinstance(memory, int) or memory < 128:
+        return "Invalid memory size. Must be at least 128 MiB."
+    if not name or not isinstance(name, str) or any(c in name for c in "<>&'\""):
+        return "Invalid VM name."
+    if not path or not isinstance(path, str) or any(c in path for c in "<>&'\""):
+        return "Invalid disk image path."
+    conn = None
     try:
+        conn = libvirt.open("qemu:///system")
+        # Check if VM already exists
+        try:
+            if conn.lookupByName(name):
+                return f"VM '{name}' already exists."
+        except libvirt.libvirtError:
+            pass  # Not found, OK
+        mac_addr = generate_mac()
+        domain_xml = f"""
+        <domain type='kvm'>
+          <name>{name}</name>
+          <memory unit='MiB'>{memory}</memory>
+          <vcpu>{cores}</vcpu>
+          <os>
+            <type arch='x86_64'>hvm</type>
+            <boot dev='hd'/>
+          </os>
+          <devices>
+            <disk type='file' device='disk'>
+              <driver name='qemu' type='qcow2'/>
+              <source file='{path}'/>
+              <target dev='vda' bus='virtio'/>
+            </disk>
+            <console type='pty'/>
+            <interface type='network'>
+              <mac address='{mac_addr}'/>
+              <source network='default'/>
+              <model type='virtio'/>
+            </interface>
+          </devices>
+        </domain>
+        """
+        try:
+            domain = conn.defineXML(domain_xml)
+        except libvirt.libvirtError as e:
+            return f"Libvirt error: {str(e)}"
+        if domain is None:
+            return "Failed to define the domain."
+        try:
+            domain.create()
+        except libvirt.libvirtError as e:
+            return f"Libvirt error (create): {str(e)}"
+        return "OK"
+    except libvirt.libvirtError as e:
+        return f"Libvirt error: {str(e)}"
+    finally:
+        if conn:
+            conn.close()
+
+def create_vm_snapshot(vm_name: str, snapshot_name: str, description: str = "") -> str:
+    """
+    Create a snapshot for a virtual machine.
+    """
+    conn = None
+    try:
+        conn = libvirt.open("qemu:///system")
         domain = conn.lookupByName(vm_name)
         snapshot_xml = f"""
         <domainsnapshot>
@@ -120,17 +184,20 @@ def create_vm_snapshot(vm_name, snapshot_name, description=""):
         </domainsnapshot>
         """
         domain.snapshotCreateXML(snapshot_xml, 0)
-        conn.close()
         return "OK"
     except libvirt.libvirtError as e:
         return f"Libvirt error: {str(e)}"
+    finally:
+        if conn:
+            conn.close()
 
-def list_vm_snapshots(vm_name):
+def list_vm_snapshots(vm_name: str) -> Union[List[Dict[str, Any]], str]:
+    """
+    List all snapshots for a virtual machine.
+    """
+    conn = None
     try:
         conn = libvirt.open("qemu:///system")
-    except libvirt.libvirtError as e:
-        return f"Libvirt error: {str(e)}"
-    try:
         domain = conn.lookupByName(vm_name)
         snapshot_names = domain.snapshotListNames(0)
         snapshots = []
@@ -145,53 +212,65 @@ def list_vm_snapshots(vm_name):
                 'creation_time': creation_time,
                 'state': state
             })
-        conn.close()
         return snapshots
     except libvirt.libvirtError as e:
         return f"Libvirt error: {str(e)}"
+    finally:
+        if conn:
+            conn.close()
 
-def revert_vm_snapshot(vm_name, snapshot_name):
+def revert_vm_snapshot(vm_name: str, snapshot_name: str) -> str:
+    """
+    Revert a virtual machine to a specified snapshot.
+    """
+    conn = None
     try:
         conn = libvirt.open("qemu:///system")
-    except libvirt.libvirtError as e:
-        return f"Libvirt error: {str(e)}"
-    try:
         domain = conn.lookupByName(vm_name)
         snapshot = domain.snapshotLookupByName(snapshot_name, 0)
         domain.revertToSnapshot(snapshot, 0)
-        conn.close()
         return "OK"
     except libvirt.libvirtError as e:
         return f"Libvirt error: {str(e)}"
+    finally:
+        if conn:
+            conn.close()
 
-def start_vm(vm_name):
+def start_vm(vm_name: str) -> str:
+    """
+    Start a virtual machine by name.
+    """
+    conn = None
     try:
         conn = libvirt.open("qemu:///system")
-    except libvirt.libvirtError as e:
-        return f"Libvirt error: {str(e)}"
-    try:
         domain = conn.lookupByName(vm_name)
         domain.create()
-        conn.close()
         return "OK"
     except libvirt.libvirtError as e:
         return f"Libvirt error: {str(e)}"
+    finally:
+        if conn:
+            conn.close()
 
-def reboot_vm(vm_name):
+def reboot_vm(vm_name: str) -> str:
+    """
+    Reboot a virtual machine by name.
+    """
+    conn = None
     try:
         conn = libvirt.open("qemu:///system")
-    except libvirt.libvirtError as e:
-        return f"Libvirt error: {str(e)}"
-    try:
         domain = conn.lookupByName(vm_name)
         domain.reboot(0)
-        conn.close()
         return "OK"
     except libvirt.libvirtError as e:
         return f"Libvirt error: {str(e)}"
+    finally:
+        if conn:
+            conn.close()
 
-# CLI argument parsing
 def main():
+    import argparse
+
     parser = argparse.ArgumentParser(description="Libvirt VM CLI Tool")
     subparsers = parser.add_subparsers(dest="command")
 
